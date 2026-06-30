@@ -1,0 +1,78 @@
+name: Android CI
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK and CMake
+        run: |
+          sdkmanager "ndk;28.2.13676358" "cmake;3.22.1"
+
+      - name: Run static architecture and cleanup checks
+        run: ./scripts/verify-static.sh
+
+      - name: Verify test-suite guardrails
+        run: ./scripts/verify-test-suite.sh
+
+      - name: Verify committed Gradle wrapper and build environment
+        run: ./scripts/verify-build-environment.sh
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Run JVM and Android unit tests
+        run: |
+          ./gradlew \
+            :core:model:test \
+            :core:mapdata:test \
+            :core:routing:test \
+            :core:progress:test \
+            :core:guidance:test \
+            :core:geo:testDebugUnitTest \
+            :core:location:testDebugUnitTest \
+            :core:offline:testDebugUnitTest \
+            :core:service:testDebugUnitTest \
+            :core:observability:testDebugUnitTest \
+            :feature:map:testDebugUnitTest \
+            --stacktrace
+
+      - name: Run lint
+        run: |
+          ./gradlew \
+            :app:lintDebug \
+            :feature:map:lintDebug \
+            :core:location:lintDebug \
+            :core:offline:lintDebug \
+            :core:service:lintDebug \
+            :core:observability:lintDebug \
+            --stacktrace
