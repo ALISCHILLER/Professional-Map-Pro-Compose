@@ -1,5 +1,0 @@
-# Copy this file to local.properties on your development machine.
-# Do not commit local.properties.
-sdk.dir=/absolute/path/to/Android/Sdk
-# Optional: if Android Studio does not auto-detect NDK/CMake.
-# ndk.dir=/absolute/path/to/Android/Sdk/ndk/26.1.10909125
