@@ -1,0 +1,145 @@
+name: Android CI
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK and CMake
+        run: |
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+
+      - name: Run static architecture and cleanup checks
+        run: ./scripts/verify-static.sh
+
+      - name: Verify test-suite guardrails
+        run: ./scripts/verify-test-suite.sh
+
+      - name: Verify committed Gradle wrapper and build environment
+        run: ./scripts/verify-build-environment.sh
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Run JVM and Android unit tests
+        run: |
+          ./gradlew \
+            :core:model:test \
+            :core:mapdata:test \
+            :core:routing:test \
+            :core:progress:test \
+            :core:guidance:test \
+            :core:geo:testDebugUnitTest \
+            :core:location:testDebugUnitTest \
+            :core:offline:testDebugUnitTest \
+            :core:service:testDebugUnitTest \
+            :core:observability:testDebugUnitTest \
+            :feature:map:testDebugUnitTest \
+            --stacktrace
+
+      - name: Run lint
+        run: |
+          ./gradlew \
+            :app:lintDebug \
+            :feature:map:lintDebug \
+            :core:location:lintDebug \
+            :core:offline:lintDebug \
+            :core:service:lintDebug \
+            :core:observability:lintDebug \
+            --stacktrace
+
+
+  release-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    needs: build
+    env:
+      PMP_OSRM_BASE_URL: https://routing.ci.invalid
+      PMP_ROUTING_USER_AGENT: ProfessionalMapPro-CI/1.0 (ci@example.invalid)
+      PMP_RELEASE_STORE_FILE: ${{ github.workspace }}/ci-release.jks
+      PMP_RELEASE_STORE_PASSWORD: ci-release-password
+      PMP_RELEASE_KEY_ALIAS: ci-release
+      PMP_RELEASE_KEY_PASSWORD: ci-release-password
+      PMP_VERSION_CODE: 1
+      PMP_VERSION_NAME: 1.0.0-ci
+      PMP_TELEMETRY_DEFAULT_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK and CMake
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Generate isolated CI signing key
+        run: |
+          keytool -genkeypair -noprompt \
+            -keystore "$PMP_RELEASE_STORE_FILE" \
+            -storepass "$PMP_RELEASE_STORE_PASSWORD" \
+            -alias "$PMP_RELEASE_KEY_ALIAS" \
+            -keypass "$PMP_RELEASE_KEY_PASSWORD" \
+            -keyalg RSA -keysize 3072 -validity 2 \
+            -dname "CN=CI Release Gate,OU=Engineering,O=ProfessionalMapPro,C=US"
+
+      - name: Build and lint hardened release
+        run: |
+          ./gradlew \
+            :app:bundleRelease \
+            :app:lintRelease \
+            :feature:map:lintRelease \
+            :core:service:lintRelease \
+            --stacktrace
+
+      - name: Generate checksum
+        run: sha256sum app/build/outputs/bundle/release/app-release.aab > app-release.aab.sha256
+
+      - name: Upload release-gate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: professional-map-pro-release-gate
+          path: |
+            app/build/outputs/bundle/release/app-release.aab
+            app-release.aab.sha256
+          if-no-files-found: error

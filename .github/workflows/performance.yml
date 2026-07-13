@@ -1,0 +1,68 @@
+name: Android Performance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 2 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-performance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macrobenchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PMP_OSRM_BASE_URL: https://routing.benchmark.invalid
+      PMP_ROUTING_USER_AGENT: ProfessionalMapPro-Benchmark/1.0 (benchmark@example.invalid)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install Android performance test SDKs
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;28.2.13676358" \
+            "cmake;3.22.1" \
+            "system-images;android-33;aosp_atd;x86_64"
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run startup Macrobenchmark and Baseline Profile generator
+        run: ./gradlew :benchmark:pixel6Api33BenchmarkAndroidTest --stacktrace
+
+      - name: Upload benchmark outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: professional-map-pro-performance
+          path: |
+            benchmark/build/outputs/**
+            benchmark/build/reports/**
+          if-no-files-found: warn
